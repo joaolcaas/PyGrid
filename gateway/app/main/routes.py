@@ -10,6 +10,7 @@ import os
 import requests
 
 from .persistence.manager import register_new_node, connected_nodes, delete_node
+from .processes import processes
 
 
 # All grid nodes registered at grid network will be stored here
@@ -18,6 +19,9 @@ grid_nodes = {}
 SMPC_HOST_CHUNK = 4  # Minimum nodes required to host an encrypted model
 INVALID_JSON_FORMAT_MESSAGE = (
     "Invalid JSON format."  # Default message used to report Invalid JSON format.
+)
+INVALID_REQUEST_KEY_MESSAGE = (
+    "Invalid request key."  # Default message for invalid request key.
 )
 
 
@@ -29,7 +33,7 @@ def index():
 
 @main.route("/join", methods=["POST"])
 def join_grid_node():
-    """ Register a new grid node at grid network. 
+    """ Register a new grid node at grid network.
         TODO: Add Authentication process.
     """
 
@@ -125,8 +129,18 @@ def choose_model_host():
     if not n_replica:
         n_replica = 1
 
-    hosts = random.sample(list(grid_nodes.keys()), n_replica)
-    hosts_info = [(host, grid_nodes[host]) for host in hosts]
+    model_id = request.args.get("model_id")
+    hosts_info = None
+
+    # lookup the nodes already hosting this model to prevent hosting different model versions
+    if model_id:
+        hosts_info = _get_model_hosting_nodes(model_id)
+
+    # no model id given or no hosting nodes found: randomly choose node
+    if not hosts_info:
+        hosts = random.sample(list(grid_nodes.keys()), n_replica)
+        hosts_info = [(host, grid_nodes[host]) for host in hosts]
+
     return Response(json.dumps(hosts_info), status=200, mimetype="application/json")
 
 
@@ -182,16 +196,8 @@ def search_model():
     try:
         body = json.loads(request.data)
 
-        grid_nodes = connected_nodes()
-        match_nodes = []
-        for node in grid_nodes:
-            try:
-                response = requests.get(grid_nodes[node] + "/models/").content
-            except requests.exceptions.ConnectionError:
-                continue
-            response = json.loads(response)
-            if body["model_id"] in response.get("models", []):
-                match_nodes.append((node, grid_nodes[node]))
+        model_id = body["model_id"]
+        match_nodes = _get_model_hosting_nodes(model_id)
 
         # It returns a list[ (id, address) ]  with all grid nodes that have the desired model
         response_body = match_nodes
@@ -275,3 +281,88 @@ def search_dataset_tags():
         status_code = 400
 
     return Response(json.dumps(response_body), status=200, mimetype="application/json")
+
+
+@main.route("/federated/get-protocol", methods=["GET"])
+def download_protocol():
+    """Request a download of a protocol from  PyGrid"""
+
+    response_body = {"message": None}
+    status_code = None
+
+    worker_id = request.args.get("worker_id")
+    request_key = request.args.get("request_key")
+    protocol_id = request.args.get("protocol_id")
+
+    _protocol = processes.get_protocol(protocol_id)
+
+    model_id = _protocol.fl_process.json()["model"]
+
+    _cycle = processes.get_cycle(model_id)
+    _validated = _cycle.validate(worker_id, request_key) if _cycle else False
+
+    if _validated:
+        status_code = 200
+        return Response(
+            json.dumps(_protocol.fl_process.json()["client_protocols"]),
+            status=status_code,
+            mimetype="application/json",
+        )
+    else:
+        response_body["message"] = INVALID_REQUEST_KEY_MESSAGE
+        status_code = 400
+
+        return Response(
+            json.dumps(response_body), status=status_code, mimetype="application/json"
+        )
+
+
+def _get_model_hosting_nodes(model_id):
+    """ Search all nodes if they are currently hosting the model.
+
+    :param model_id: The model to search for
+    :return: An array of the nodes currently hosting the model
+    """
+    grid_nodes = connected_nodes()
+    match_nodes = []
+    for node in grid_nodes:
+        try:
+            response = requests.get(grid_nodes[node] + "/models/").content
+        except requests.exceptions.ConnectionError:
+            continue
+        response = json.loads(response)
+        if model_id in response.get("models", []):
+            match_nodes.append((node, grid_nodes[node]))
+
+    return match_nodes
+
+
+@main.route("/federated/get-model", methods=["GET"])
+def download_model():
+    """ validate request key and download model
+    """
+
+    model_id = request.args.get("model_id")
+    worker_id = request.args.get("worker_id")
+    request_key = request.args.get("request_key")
+
+    _validated = False
+
+    # check if cycle exist and hash matches
+    _cycle = processes.get_cycle(model_id)
+    _validated = _cycle.validate(worker_id, request_key) if _cycle else False
+
+    if _validated:
+        return Response(
+            json.dumps(_cycle.fl_process.json()["model"]),
+            status=200,
+            mimetype="application/json",
+        )
+    else:
+        response_body = {"message": None}
+        response_body["message"] = INVALID_REQUEST_KEY_MESSAGE
+        status_code = 400
+
+        return Response(
+            json.dumps(response_body), status=status_code, mimetype="application/json"
+        )
