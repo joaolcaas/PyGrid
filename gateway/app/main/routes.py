@@ -11,7 +11,7 @@ import requests
 
 from .persistence.manager import register_new_node, connected_nodes, delete_node
 from .processes import processes
-
+from .auth import workers
 
 # All grid nodes registered at grid network will be stored here
 grid_nodes = {}
@@ -23,6 +23,7 @@ INVALID_JSON_FORMAT_MESSAGE = (
 INVALID_REQUEST_KEY_MESSAGE = (
     "Invalid request key."  # Default message for invalid request key.
 )
+INVALID_PROTOCOL_MESSAGE = "Protocol is None or the id does not exist."
 
 
 @main.route("/", methods=["GET"])
@@ -285,7 +286,7 @@ def search_dataset_tags():
 
 @main.route("/federated/get-protocol", methods=["GET"])
 def download_protocol():
-    """Request a download of a protocol from  PyGrid"""
+    """Request a download of a protocol"""
 
     response_body = {"message": None}
     status_code = None
@@ -294,20 +295,29 @@ def download_protocol():
     request_key = request.args.get("request_key")
     protocol_id = request.args.get("protocol_id")
 
-    _protocol = processes.get_protocol(protocol_id)
+    _worker = workers.get_worker(worker_id)
 
-    model_id = _protocol.fl_process.json()["model"]
+    _cycle = None
+    if _worker:
+        _cycle = _worker.get_cycle(request_key)
 
-    _cycle = processes.get_cycle(model_id)
-    _validated = _cycle.validate(worker_id, request_key) if _cycle else False
+    if _cycle:
+        protocol_res = _cycle.fl_process.json()["client_protocols"]
+        if protocol_res != None and protocol_id in protocol_res.keys():
+            return Response(
+                json.dumps(protocol_res[protocol_id]),
+                status=200,
+                mimetype="application/json",
+            )
+        else:
+            response_body["message"] = INVALID_PROTOCOL_MESSAGE
+            status_code = 400
 
-    if _validated:
-        status_code = 200
-        return Response(
-            json.dumps(_protocol.fl_process.json()["client_protocols"]),
-            status=status_code,
-            mimetype="application/json",
-        )
+            return Response(
+                json.dumps(response_body),
+                status=status_code,
+                mimetype="application/json",
+            )
     else:
         response_body["message"] = INVALID_REQUEST_KEY_MESSAGE
         status_code = 400
@@ -346,13 +356,14 @@ def download_model():
     worker_id = request.args.get("worker_id")
     request_key = request.args.get("request_key")
 
-    _validated = False
+    _worker = workers.get_worker(worker_id)
 
-    # check if cycle exist and hash matches
-    _cycle = processes.get_cycle(model_id)
-    _validated = _cycle.validate(worker_id, request_key) if _cycle else False
+    _cycle = None
+    if _worker:
+        _cycle = _worker.get_cycle(request_key)
 
-    if _validated:
+    # If the worker own a cycle matching with the request_key
+    if _cycle:
         return Response(
             json.dumps(_cycle.fl_process.json()["model"]),
             status=200,
