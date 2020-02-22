@@ -393,7 +393,7 @@ def report_fl_process():
 
         _cycle = None
         if _worker:
-            # check if was accepted into a cycle
+            
             _cycle = _worker.get_cycle(request_key)
         
         if _cycle:
