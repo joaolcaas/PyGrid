@@ -377,3 +377,33 @@ def download_model():
         return Response(
             json.dumps(response_body), status=status_code, mimetype="application/json"
         )
+
+@main.route("/federated/report")
+def report_fl_process():
+    """Report a fl process""" 
+
+    response_body = {"message": None}
+    status_code = None
+    try:
+        body = json.loads(request.data)
+
+        worker_id = body["worker_id"]
+        request_key = body["request_key"]
+        model_diff = body["diff"]
+
+        _cycle = None
+        if _worker:
+            # check if was accepted into a cycle
+            _cycle = _worker.get_cycle(request_key)
+        
+        if _cycle:
+            pass
+        else:
+            response_body["message"] = INVALID_REQUEST_KEY_MESSAGE
+            status_code = 400
+
+    except ValueError or KeyError:
+        response_body["message"] - INVALID_JSON_FORMAT_MESSAGE
+        status_code = 400
+
+    return Response(json.dumps(response_body),status=status_code, mimetype="application/json")
